@@ -1,0 +1,84 @@
+/* Base Styles */
+body {
+  font-family: 'Segoe UI', sans-serif;
+  background-color: #ffffff;
+  color: #0a5cff;
+  margin: 0;
+  padding: 2rem;
+  display: flex;
+  justify-content: center;
+  align-items: start;
+  min-height: 100vh;
+}
+
+.container {
+  width: 100%;
+  max-width: 600px;
+}
+
+/* Headline */
+h1 {
+  font-size: 2rem;
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+/* Access Code Area */
+#auth {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 2rem;
+}
+
+input[type="password"],
+input[type="file"],
+button {
+  font-size: 1rem;
+  padding: 0.6rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  outline: none;
+}
+
+button {
+  background-color: #0a5cff;
+  color: white;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+button:hover {
+  background-color: #084ccf;
+}
+
+/* Upload Area */
+.upload-area {
+  border: 2px dashed #0a5cff;
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  margin-bottom: 1rem;
+  transition: background-color 0.2s ease;
+}
+
+.upload-area.dragover {
+  background-color: #f0f8ff;
+}
+
+/* Progress & Output */
+#progress {
+  margin-top: 1rem;
+  font-size: 0.95rem;
+}
+
+#downloadLinks {
+  margin-top: 1rem;
+}
+
+a.download-link {
+  display: block;
+  margin: 0.25rem 0;
+  color: #0a5cff;
+  text-decoration: underline;
+}

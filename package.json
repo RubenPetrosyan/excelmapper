@@ -1,0 +1,19 @@
+{
+  "name": "excelmapper",
+  "version": "1.0.0",
+  "description": "A web app to standardize Excel file formats",
+  "main": "app.js",
+  "scripts": {
+    "start": "vercel dev"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "keywords": [
+    "excel",
+    "mapper",
+    "file-processing"
+  ],
+  "author": "Ruben",
+  "license": "MIT"
+}
