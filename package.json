@@ -7,6 +7,7 @@
     "start": "vercel dev"
   },
   "dependencies": {
+    "formidable": "^3.5.4",
     "xlsx": "^0.18.5"
   },
   "keywords": [
