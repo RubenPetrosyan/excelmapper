@@ -16,7 +16,7 @@ export const config = {
 
 /**
  * The fixed headers for columns A1 → AO1 in the output workbook.
- * Each element here corresponds to a column, starting at A (index 0).
+ * Each string in this array corresponds to a column, starting at A (index 0).
  */
 const OUTPUT_HEADERS = [
   "Veh #",
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
       return res.status(500).send("Error parsing uploaded file");
     }
 
-    // ─── 1) Retrieve the uploaded file under field 'file'
+    // ─── 1) Retrieve the uploaded file under field 'file' ───
     let fileObj = files.file;
     if (!fileObj) {
       console.error("No `files.file` present. Keys were:", Object.keys(files));
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
       fileObj = fileObj[0];
     }
 
-    // 2) Locate the actual temp path where Formidable saved it
+    // ─── 2) Locate the actual temp path on disk ───
     let uploadedPath = null;
     for (const value of Object.values(fileObj)) {
       if (typeof value === "string") {
@@ -95,24 +95,24 @@ export default async function handler(req, res) {
             break;
           }
         } catch {
-          // ignore non-path values
+          // ignore
         }
       }
     }
     if (!uploadedPath) {
       console.error(
-        "Could not locate temp path on fileObj. Available keys were:",
+        "Could not locate a temp path on fileObj. Available keys were:",
         Object.keys(fileObj)
       );
       return res.status(400).send("Could not locate the uploaded file on disk.");
     }
 
-    // 3) Ensure the file is non-empty
+    // ─── 3) Ensure the uploaded file has content ───
     if (!fileObj.size || fileObj.size === 0) {
       return res.status(400).send("Uploaded file was empty.");
     }
 
-    // 4) Read and parse the workbook
+    // ─── 4) Read and parse the workbook ───
     let workbook;
     try {
       const fileBuffer = fs.readFileSync(uploadedPath);
@@ -122,14 +122,14 @@ export default async function handler(req, res) {
       return res.status(400).send("Invalid or unreadable Excel file.");
     }
 
-    // 5) Grab the first sheet
+    // ─── 5) Grab the first worksheet ───
     const firstSheetName = workbook.SheetNames[0];
     if (!firstSheetName) {
       return res.status(400).send("Uploaded workbook has no sheets.");
     }
     const sheet = workbook.Sheets[firstSheetName];
 
-    // 6) Convert sheet to a 2D array so we can locate the header row
+    // ─── 6) Convert sheet to a 2D array so we can locate the header row ───
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
@@ -139,7 +139,9 @@ export default async function handler(req, res) {
       return res.status(400).send("The first sheet in the workbook contains no data.");
     }
 
-    // ─── 7) Find exactly one "header row" that contains Year, Make, VIN, and Cost/Stated ───
+    // ─── 7) Find exactly one header row:\n
+    // That is, the first row where at least one cell includes "year", one includes "make", one includes "vin",
+    // and one includes either "cost" or "stated" (case-insensitive).
     let headerRowIdx = -1;
     for (let r = 0; r < rows.length; r++) {
       const rowLower = rows[r].map(cell =>
@@ -147,7 +149,7 @@ export default async function handler(req, res) {
       );
       const hasYear = rowLower.some(c => c.includes("year"));
       const hasMake = rowLower.some(c => c.includes("make"));
-      const hasVin = rowLower.some(c => c.includes("vin"));
+      const hasVin  = rowLower.some(c => c.includes("vin"));
       const hasCostOrStated =
         rowLower.some(c => c.includes("cost")) ||
         rowLower.some(c => c.includes("stated"));
@@ -163,132 +165,68 @@ export default async function handler(req, res) {
       );
     }
 
-    // ─── 8) Slice out all the rows below that header (they are our data) ───
+    // ─── 8) Slice out all rows below that header as the data rows ───
     const dataRows = rows.slice(headerRowIdx + 1);
     if (dataRows.length === 0) {
       return res.status(400).send("No data found after the header row.");
     }
 
-    // ─── 9) Heuristically identify which column is Year/Make/VIN/Cost ───
-    const sampleSize = Math.min(5, dataRows.length);
-    const columnScores = [];
+    // ─── 9) Use the header row itself to pick out column indexes for Year/Make/VIN/Cost ───
+    const headerRow = rows[headerRowIdx].map(cell =>
+      typeof cell === "string" ? cell.toLowerCase() : ""
+    );
 
-    // Initialize counters for each column index
-    for (let c = 0; c < dataRows[0].length; c++) {
-      columnScores[c] = {
-        yearCount: 0,
-        makeCount: 0,
-        vinCount: 0,
-        costCount: 0,
-        total: 0
-      };
+    const yearColIdx = headerRow.findIndex(c => c.includes("year"));
+    const makeColIdx = headerRow.findIndex(c => c.includes("make"));
+    const vinColIdx  = headerRow.findIndex(c => c.includes("vin"));
+    // Cost could be labeled "cost" or "stated"
+    let costColIdx = headerRow.findIndex(c => c.includes("cost"));
+    if (costColIdx < 0) {
+      costColIdx = headerRow.findIndex(c => c.includes("stated"));
     }
 
-    // Sample the first `sampleSize` rows
-    for (let r = 0; r < sampleSize; r++) {
-      const row = dataRows[r];
-      for (let c = 0; c < row.length; c++) {
-        const s = String(row[c] || "").trim();
-
-        // Year heuristic: exactly 4 digits between 1900–2100
-        if (/^\d{4}$/.test(s)) {
-          const y = parseInt(s, 10);
-          if (y >= 1900 && y <= 2100) {
-            columnScores[c].yearCount++;
-          }
-        }
-
-        // VIN heuristic: 16+ alphanumeric characters
-        if (/^[A-Za-z0-9]{16,}$/.test(s)) {
-          columnScores[c].vinCount++;
-        }
-
-        // Make heuristic: all letters, at least 2 characters
-        if (/^[A-Za-z]{2,}$/.test(s)) {
-          columnScores[c].makeCount++;
-        }
-
-        // Cost heuristic: contains $ or comma or decimal, or is digits length > 4
-        if (
-          /^\$?[\d,]+(\.\d+)?$/.test(s) ||
-          (/^\d+$/.test(s) && s.length > 4)
-        ) {
-          columnScores[c].costCount++;
-        }
-
-        columnScores[c].total++;
-      }
+    if (yearColIdx < 0) {
+      return res.status(400).send("Cannot find a 'Year' column in the header.");
+    }
+    if (makeColIdx < 0) {
+      return res.status(400).send("Cannot find a 'Make' column in the header.");
+    }
+    if (vinColIdx < 0) {
+      return res.status(400).send("Cannot find a 'VIN' column in the header.");
+    }
+    if (costColIdx < 0) {
+      return res.status(400).send("Cannot find a 'Cost' or 'Stated' column in the header.");
     }
 
-    // Select the best column index for each field
-    let yearColIdx = -1, bestYear = 0;
-    let makeColIdx = -1, bestMake = 0;
-    let vinColIdx = -1, bestVin = 0;
-    let costColIdx = -1, bestCost = 0;
-
-    for (let c = 0; c < columnScores.length; c++) {
-      const scores = columnScores[c];
-      if (scores.yearCount > bestYear) {
-        bestYear = scores.yearCount;
-        yearColIdx = c;
-      }
-      if (scores.makeCount > bestMake) {
-        bestMake = scores.makeCount;
-        makeColIdx = c;
-      }
-      if (scores.vinCount > bestVin) {
-        bestVin = scores.vinCount;
-        vinColIdx = c;
-      }
-      if (scores.costCount > bestCost) {
-        bestCost = scores.costCount;
-        costColIdx = c;
-      }
-    }
-
-    // Validate that each field was found with minimal confidence
-    if (bestYear < 2) {
-      return res.status(400).send("Cannot reliably find the Year column.");
-    }
-    if (bestMake < 2) {
-      return res.status(400).send("Cannot reliably find the Make column.");
-    }
-    if (bestVin < 1) {
-      return res.status(400).send("Cannot reliably find the VIN column.");
-    }
-    if (bestCost < 1) {
-      return res.status(400).send("Cannot reliably find the Cost column.");
-    }
-
-    // ─── 10) Build a new worksheet and write fixed headers A1→AO1 ───
+    // ─── 10) Build a new worksheet object, writing fixed A1→AO1 ───
     const newSheet = {};
     OUTPUT_HEADERS.forEach((headerText, colIndex) => {
       const address = XLSX.utils.encode_cell({ r: 0, c: colIndex });
       newSheet[address] = { v: headerText };
     });
 
-    // ─── 11) Iterate ALL dataRows, but filter out known junk patterns ───
+    // ─── 11) Iterate ALL dataRows, filter out junk patterns, and write fields ───
     let outputRowCount = 0;
     for (let r = 0; r < dataRows.length; r++) {
       const row = dataRows[r];
 
-      // Extract raw values
-      const rawYear = row[yearColIdx] || "";
-      const rawMake = row[makeColIdx] || "";
-      const rawVin = row[vinColIdx] || "";
-      const rawCost = row[costColIdx] || "";
+      // Extract raw values from the identified columns
+      const rawYear = row[yearColIdx]  || "";
+      const rawMake = row[makeColIdx]  || "";
+      const rawVin  = row[vinColIdx]   || "";
+      const rawCost = row[costColIdx]  || "";
 
       const yearStr = String(rawYear).trim();
       const makeStr = String(rawMake).trim();
-      const vinStr = String(rawVin).trim();
+      const vinStr  = String(rawVin).trim();
       const costStr = String(rawCost).trim();
 
-      // ── A) Skip if ALL four are blank (completely empty row) ──
+      // ── A) Skip if ALL four fields are blank ──
       if (!yearStr && !makeStr && !vinStr && !costStr) {
         continue;
       }
 
-      // ── B) Skip if this row is exactly repeating the header row
+      // ── B) Skip if this row repeats the header (e.g. "YEAR  MAKE  VIN ...") ──
       if (
         yearStr.toLowerCase() === "year" &&
         makeStr.toLowerCase() === "make" &&
@@ -297,12 +235,12 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // ── C) Skip if the Make cell mentions "tractor" or "trailer"
+      // ── C) Skip if Make cell contains "tractor" or "trailer" (junk section labels) ──
       if (/tractor/i.test(makeStr) || /trailer/i.test(makeStr)) {
         continue;
       }
 
-      // ── D) Skip if ANY cell in this row contains "total"
+      // ── D) Skip if ANY cell in this row contains "total" ──
       let hasTotal = false;
       for (let c = 0; c < row.length; c++) {
         if (String(row[c]).toLowerCase().includes("total")) {
@@ -314,36 +252,36 @@ export default async function handler(req, res) {
         continue;
       }
 
-      // Now it's a valid data row. Clean fields and write them:
-      const yearVal = yearStr;
-      const makeVal = makeStr;
-      const vinVal = vinStr;
-      // Strip out all non-digit characters from cost (e.g. "$20,000" → "20000")
+      // If we made it here, this is a valid data row. Clean and write each field:
+      const yearVal = yearStr;               // e.g. "2019"
+      const makeVal = makeStr;               // e.g. "VOLVO"
+      const vinVal  = vinStr;                // e.g. "4V4NC9EH7KN907127"
+      // Strip all nondigits from cost (e.g. "$20,000" → "20000")
       const costVal = costStr.replace(/\D/g, "");
 
       outputRowCount++;
-      const outRow = outputRowCount + 1; // because row 1 (r=0) is header in new sheet
+      const outRow = outputRowCount + 1; // because row=1 (r=0) is header in new sheet
 
-      // Place Year → column E (index 4)
+      // Write Year → column E (index 4)
       newSheet[`E${outRow}`] = { v: yearVal };
-      // Place Make → column F (index 5)
+      // Write Make → column F (index 5)
       newSheet[`F${outRow}`] = { v: makeVal };
-      // Place VIN → column J (index 9)
+      // Write VIN → column J (index 9)
       newSheet[`J${outRow}`] = { v: vinVal };
-      // Place Cost new → column V (index 21)
+      // Write Cost new → column V (index 21)
       newSheet[`V${outRow}`] = { v: costVal };
     }
 
-    // ─── 12) If no rows were written, return an error ───
+    // ─── 12) If no valid data rows got written, return an error ───
     if (outputRowCount === 0) {
       return res
         .status(400)
         .send("No valid data rows (Year/Make/VIN/Cost) were found after filtering.");
     }
 
-    // ─── 13) Define the worksheet range "!ref" from A1 to AO(lastDataRow) ───
-    const lastRowIndex = outputRowCount; // data runs 1..outputRowCount
-    const lastColIndex = OUTPUT_HEADERS.length - 1; // 40 (A=0…AO=40)
+    // ─── 13) Define the worksheet range ("!ref") from A1 → AO(lastDataRow) ───
+    const lastRowIndex = outputRowCount;            // data runs rows 1..outputRowCount
+    const lastColIndex = OUTPUT_HEADERS.length - 1; // 40 (A=0..AO=40)
     newSheet["!ref"] = XLSX.utils.encode_range(
       { r: 0, c: 0 },
       { r: lastRowIndex, c: lastColIndex }
