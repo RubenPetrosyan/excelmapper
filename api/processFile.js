@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 
 /**
- * Disable Next.js’s built‐in bodyParser so Formidable can handle multipart/form‐data.
+ * Disable Next.js’s built-in bodyParser so Formidable can handle multipart/form-data.
  */
 export const config = {
   api: {
@@ -14,12 +14,59 @@ export const config = {
   },
 };
 
+/**
+ * These are the exact headers for columns A1 → AO1 in the output workbook.
+ * Each string in this array corresponds to a column, starting at A.
+ */
+const OUTPUT_HEADERS = [
+  "Veh #",
+  "Company vehicle #",
+  "Insured ID",
+  "Plate #",
+  "Year",
+  "Make",
+  "Model",
+  "Body type",
+  "Body, if \"Other\"",
+  "VIN",
+  "Default account address for garaging",
+  "Garaging Address 1",
+  "Garaging Address 2",
+  "Garaging Address 3",
+  "Garaging City",
+  "Garaging State",
+  "Garaging Zip/Postal",
+  "Garaging County",
+  "Garaging Country",
+  "Vehicle type",
+  "Symbol/age group",
+  "Cost new",
+  "Licensed state",
+  "Territory",
+  "GVW/GCW",
+  "Class",
+  "Special industry class",
+  "Factor Liability",
+  "Factor Secondary",
+  "Factor Physical damage",
+  "Seating capacity",
+  "Radius",
+  "Farthest terminal",
+  "Use",
+  "Special use",
+  "Days driven per week",
+  "Date purchased",
+  "Purchased N or U",
+  "Leased",
+  "Included in fleet",
+  "Rate class code"
+];
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).send("Method not allowed");
   }
 
-  // 1) Create a new Formidable instance that expects at most one file under field name "file"
   const form = new IncomingForm({ multiples: false });
 
   form.parse(req, async (err, fields, files) => {
@@ -28,7 +75,7 @@ export default async function handler(req, res) {
       return res.status(500).send("Error parsing uploaded file");
     }
 
-    // 2) Grab whatever Formidable placed under files.file
+    // 1) Grab the uploaded file under field name "file"
     let fileObj = files.file;
     if (!fileObj) {
       console.error("No `files.file` present. Keys were:", Object.keys(files));
@@ -37,32 +84,25 @@ export default async function handler(req, res) {
         .send("Please upload under the form field name 'file'.");
     }
 
-    // 3) If Formidable returned an array (because the client used `multiple`), pick the first element
+    // 2) If Formidable returned an array (because <input multiple>), pick the first element
     if (Array.isArray(fileObj)) {
       fileObj = fileObj[0];
     }
 
-    // 4) Log the full file object so you can inspect its shape in Vercel logs if needed
-    console.log("Full file object from Formidable:", fileObj);
-
-    // 5) Scan all string‐valued properties of fileObj to find a real path on disk.
-    //    Formidable v3+ uses `fileObj.filepath`, older versions use `fileObj.path`,
-    //    and occasionally it might be under some other string property that begins with "/tmp".
+    // 3) Attempt to find the real temp path on disk
     let uploadedPath = null;
-    for (const candidateValue of Object.values(fileObj)) {
-      if (typeof candidateValue === "string") {
+    for (const value of Object.values(fileObj)) {
+      if (typeof value === "string") {
         try {
-          if (fs.existsSync(candidateValue)) {
-            uploadedPath = candidateValue;
+          if (fs.existsSync(value)) {
+            uploadedPath = value;
             break;
           }
-        } catch (_) {
-          // ignore errors for non‐path values
+        } catch {
+          // ignore non-path values
         }
       }
     }
-
-    console.log("Resolved uploadedPath:", uploadedPath);
 
     if (!uploadedPath) {
       console.error(
@@ -72,21 +112,16 @@ export default async function handler(req, res) {
       return res
         .status(400)
         .send(
-          "Could not locate the uploaded file on disk. Check Function Logs for the full 'file' object."
+          "Could not locate the uploaded file on disk. Check Function Logs for details."
         );
     }
 
-    // 6) Confirm the client actually sent bytes
-    console.log("Incoming file metadata:", {
-      originalFilename: fileObj.originalFilename,
-      size: fileObj.size,
-      mimeType: fileObj.mimetype || "n/a",
-    });
-    if (fileObj.size === 0) {
+    // 4) Ensure the uploaded file has content
+    if (!fileObj.size || fileObj.size === 0) {
       return res.status(400).send("Uploaded file was empty.");
     }
 
-    // 7) Read the uploaded file into a Buffer, then parse as XLSX
+    // 5) Read the uploaded file into a Buffer and parse as XLSX
     let workbook;
     try {
       const fileBuffer = fs.readFileSync(uploadedPath);
@@ -96,18 +131,18 @@ export default async function handler(req, res) {
       return res.status(400).send("Invalid or unreadable Excel file.");
     }
 
-    // 8) Take the very first sheet from the workbook
+    // 6) Take the first worksheet
     const firstSheetName = workbook.SheetNames[0];
     if (!firstSheetName) {
       return res.status(400).send("Uploaded workbook has no sheets.");
     }
     const sheet = workbook.Sheets[firstSheetName];
 
-    // 9) Convert the entire sheet into a 2D array so we can locate data in ANY column
+    // 7) Convert the sheet into a 2D array (header:1) so we can detect arbitrary column locations
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
-      blankrows: false,
+      blankrows: false
     });
     if (!Array.isArray(rows) || rows.length === 0) {
       return res
@@ -115,36 +150,91 @@ export default async function handler(req, res) {
         .send("The first sheet in the workbook contains no data.");
     }
 
-    // 10) Build the output rows: any row with ≥3 non‐empty cells → {Make, Year, VIN Number}
-    const output = [];
-    rows.forEach((rowArr) => {
-      const nonEmpty = rowArr.filter(
-        (cell) => cell !== null && cell !== undefined && cell !== ""
-      );
-      if (nonEmpty.length >= 3) {
-        const [makeVal, yearVal, vinVal] = nonEmpty;
-        output.push({
-          Make: makeVal,
-          Year: yearVal,
-          "VIN Number": vinVal,
-        });
+    // 8) Read the header row from the input and normalize to lowercase for detection
+    const inputHeaderRow = rows[0].map((h) =>
+      typeof h === "string" ? h.toLowerCase() : ""
+    );
+
+    // 9) Find indexes of Year, Make, VIN, and Cost new (case-insensitive substring match)
+    let yearColIdx = -1;
+    let makeColIdx = -1;
+    let vinColIdx = -1;
+    let costColIdx = -1;
+
+    inputHeaderRow.forEach((cellText, idx) => {
+      if (cellText.includes("year") && yearColIdx === -1) {
+        yearColIdx = idx;
+      }
+      if (cellText.includes("make") && makeColIdx === -1) {
+        makeColIdx = idx;
+      }
+      if (cellText.includes("vin") && vinColIdx === -1) {
+        vinColIdx = idx;
+      }
+      if (cellText.includes("cost") && costColIdx === -1) {
+        costColIdx = idx;
       }
     });
 
-    if (output.length === 0) {
+    if (
+      yearColIdx < 0 ||
+      makeColIdx < 0 ||
+      vinColIdx < 0 ||
+      costColIdx < 0
+    ) {
       return res
         .status(400)
-        .send("No rows with at least three non-empty cells were found.");
+        .send(
+          "Input sheet is missing one of: Year, Make, VIN, or Cost new (case-insensitive)."
+        );
     }
 
-    // 11) Create a new workbook with exactly those three columns
-    const newSheet = XLSX.utils.json_to_sheet(output, {
-      header: ["Make", "Year", "VIN Number"],
+    // 10) Build a new worksheet object and place the fixed headers into A1→AO1
+    const newSheet = {};
+    OUTPUT_HEADERS.forEach((headerText, colIndex) => {
+      const address = XLSX.utils.encode_cell({ r: 0, c: colIndex });
+      newSheet[address] = { v: headerText };
     });
+
+    // 11) For each data row in the input (rows[1] onward), extract Year/Make/VIN/Cost and place into output
+    for (let i = 1; i < rows.length; i++) {
+      const inputRow = rows[i];
+
+      // Extract values (or empty string if undefined)
+      const yearVal = inputRow[yearColIdx] ?? "";
+      const makeVal = inputRow[makeColIdx] ?? "";
+      const vinVal = inputRow[vinColIdx] ?? "";
+      const rawCost = inputRow[costColIdx] ?? "";
+
+      // Clean Cost: strip anything that isn't a digit
+      const cleanedCost = String(rawCost).replace(/\D/g, "");
+
+      const outputRowNumber = i + 1; // because header was row 1
+
+      // Place Year → column E (index 4)
+      newSheet[`E${outputRowNumber}`] = { v: yearVal };
+
+      // Place Make → column F (index 5)
+      newSheet[`F${outputRowNumber}`] = { v: makeVal };
+
+      // Place VIN → column J (index 9)
+      newSheet[`J${outputRowNumber}`] = { v: vinVal };
+
+      // Place Cost new → column V (index 21)
+      newSheet[`V${outputRowNumber}`] = { v: cleanedCost };
+    }
+
+    // 12) Define the sheet range from A1 to AO(lastRow)
+    const lastRow = rows.length;
+    const lastColIndex = OUTPUT_HEADERS.length - 1; // 40 (A=0, B=1, …, AO=40)
+    const startCell = { r: 0, c: 0 };
+    const endCell = { r: lastRow - 1, c: lastColIndex };
+    newSheet["!ref"] = XLSX.utils.encode_range(startCell, endCell);
+
+    // 13) Create a new workbook, append this sheet, and write it to /tmp
     const newBook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(newBook, newSheet, "Standardized");
 
-    // 12) Write the new workbook to /tmp (the only writable directory on Vercel)
     const timestamp = Date.now();
     const tempPath = path.join("/tmp", `processed-${timestamp}.xlsx`);
     try {
@@ -154,7 +244,7 @@ export default async function handler(req, res) {
       return res.status(500).send("Failed to create the processed file.");
     }
 
-    // 13) Verify the /tmp file exists and is non‐empty
+    // 14) Verify the /tmp file exists and is non-empty
     let stats;
     try {
       stats = fs.statSync(tempPath);
@@ -169,10 +259,11 @@ export default async function handler(req, res) {
       return res.status(500).send("Processed file is empty.");
     }
 
-    // 14) Finally, read the buffer and send it back to the client
+    // 15) Read the file buffer and send it back to the client
     try {
       const fileBuffer = fs.readFileSync(tempPath);
-      const originalName = fileObj.originalFilename || `upload-${timestamp}.xlsx`;
+      const originalName =
+        fileObj.originalFilename || `upload-${timestamp}.xlsx`;
       res.setHeader(
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
