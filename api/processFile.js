@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 import fs from "fs";
 import path from "path";
 
-// Disable Next.js body parsing so Formidable can handle multipart/form-data
+// Disable Next.js’s built-in bodyParser so we can let Formidable handle the multipart upload.
 export const config = {
   api: {
     bodyParser: false,
@@ -17,15 +17,16 @@ export default async function handler(req, res) {
     return res.status(405).send("Method not allowed");
   }
 
-  // Parse exactly one file under field name "file"
+  // Create a new IncomingForm; we only expect one file under the field name "file"
   const form = new IncomingForm({ multiples: false });
+
   form.parse(req, async (err, fields, files) => {
     if (err) {
       console.error("Formidable error:", err);
       return res.status(500).send("Error parsing uploaded file");
     }
 
-    // Check that a file arrived under "file"
+    // Look for the uploaded file under the name “file”
     const file = files.file;
     if (!file) {
       return res
@@ -33,11 +34,24 @@ export default async function handler(req, res) {
         .send("Please upload under the form field name 'file'.");
     }
 
-    // Log metadata so you can confirm size / temp path
+    // *** LOG THE ENTIRE file OBJECT to see which property actually holds the temp path. ***
+    console.log("Full file object from Formidable:", file);
+
+    // Formidable v3+ uses `file.filepath`; older versions use `file.path`
+    const uploadedPath = file.filepath || file.path;
+    if (!uploadedPath) {
+      console.error(
+        "Unable to find a temp path. Did Formidable save this file under an unexpected property?"
+      );
+      return res
+        .status(400)
+        .send("Could not locate the uploaded file on disk.");
+    }
+
+    console.log("Resolved temp path:", uploadedPath);
     console.log("Incoming file metadata:", {
       originalFilename: file.originalFilename,
       size: file.size,
-      filepath: file.filepath,
       mimeType: file.mimetype || "n/a",
     });
 
@@ -45,24 +59,24 @@ export default async function handler(req, res) {
       return res.status(400).send("Uploaded file was empty.");
     }
 
-    // Try reading the uploaded file into a Buffer, then parse as XLSX
+    // Attempt to read the uploaded file into a Buffer, then parse as XLSX
     let workbook;
     try {
-      const fileBuffer = fs.readFileSync(file.filepath);
+      const fileBuffer = fs.readFileSync(uploadedPath);
       workbook = XLSX.read(fileBuffer, { type: "buffer" });
     } catch (xlsxErr) {
       console.error("XLSX.read (buffer) error:", xlsxErr);
       return res.status(400).send("Invalid or unreadable Excel file.");
     }
 
-    // Take the very first worksheet
+    // Take the very first sheet in the workbook
     const firstSheetName = workbook.SheetNames[0];
     if (!firstSheetName) {
       return res.status(400).send("Uploaded workbook has no sheets.");
     }
     const sheet = workbook.Sheets[firstSheetName];
 
-    // Convert the entire sheet to a 2D array so we can locate data anywhere
+    // Convert the entire sheet to a 2D array so we can find data anywhere
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
@@ -74,12 +88,15 @@ export default async function handler(req, res) {
         .send("The first sheet in the workbook contains no data.");
     }
 
-    // Build output: any row with ≥3 non-empty cells → [Make, Year, VIN]
+    // Build the output array: every row with ≥3 non-empty cells → [Make, Year, VIN Number]
     const output = [];
     rows.forEach((rowArr) => {
+      // Filter out truly blank cells
       const nonEmpty = rowArr.filter(
         (cell) => cell !== null && cell !== undefined && cell !== ""
       );
+
+      // If at least three real values remain, assume they map to [Make, Year, VIN]
       if (nonEmpty.length >= 3) {
         const [makeVal, yearVal, vinVal] = nonEmpty;
         output.push({
@@ -96,14 +113,14 @@ export default async function handler(req, res) {
         .send("No rows with at least three non-empty cells were found.");
     }
 
-    // Create a new workbook with exactly those three columns (A, B, C)
+    // Create a new workbook with those three columns (Make, Year, VIN Number)
     const newSheet = XLSX.utils.json_to_sheet(output, {
       header: ["Make", "Year", "VIN Number"],
     });
     const newBook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(newBook, newSheet, "Standardized");
 
-    // Write to /tmp
+    // Write to /tmp so Vercel can read it back
     const timestamp = Date.now();
     const tempPath = path.join("/tmp", `processed-${timestamp}.xlsx`);
     try {
@@ -113,7 +130,7 @@ export default async function handler(req, res) {
       return res.status(500).send("Failed to create the processed file.");
     }
 
-    // Verify /tmp file exists and is non-empty
+    // Verify that the temp file was created and is non-empty
     let stats;
     try {
       stats = fs.statSync(tempPath);
@@ -128,10 +145,11 @@ export default async function handler(req, res) {
       return res.status(500).send("Processed file is empty.");
     }
 
-    // Read the final buffer and send it back
+    // Finally, read the buffer and send it back to the client
     try {
       const fileBuffer = fs.readFileSync(tempPath);
       const originalName = file.originalFilename || `upload-${timestamp}.xlsx`;
+
       res.setHeader(
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
