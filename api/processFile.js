@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 
 /**
- * Disable Next.js’s built-in bodyParser so Formidable can handle multipart/form-data.
+ * Disable Next.js’s built‐in bodyParser so Formidable can handle multipart/form‐data.
  */
 export const config = {
   api: {
@@ -138,7 +138,7 @@ export default async function handler(req, res) {
     }
     const sheet = workbook.Sheets[firstSheetName];
 
-    // 7) Convert the sheet into a 2D array (header:1) so we can detect arbitrary column locations
+    // 7) Convert the sheet into a 2D array (header:1) so we can detect the actual header row
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
@@ -150,12 +150,35 @@ export default async function handler(req, res) {
         .send("The first sheet in the workbook contains no data.");
     }
 
-    // 8) Read the header row from the input and normalize to lowercase for detection
-    const inputHeaderRow = rows[0].map((h) =>
+    // 8) Find the header row index by searching for a row containing "year", "make", "vin", and "cost"
+    let headerRowIdx = -1;
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r].map((cell) =>
+        typeof cell === "string" ? cell.toLowerCase() : ""
+      );
+      if (
+        row.some((c) => c.includes("year")) &&
+        row.some((c) => c.includes("make")) &&
+        row.some((c) => c.includes("vin")) &&
+        row.some((c) => c.includes("cost"))
+      ) {
+        headerRowIdx = r;
+        break;
+      }
+    }
+
+    if (headerRowIdx < 0) {
+      return res
+        .status(400)
+        .send(
+          "Input sheet is missing a header row containing Year, Make, VIN, and Cost (case-insensitive)."
+        );
+    }
+
+    // 9) Extract the actual header row (normalized) and find the column indexes
+    const inputHeaderRow = rows[headerRowIdx].map((h) =>
       typeof h === "string" ? h.toLowerCase() : ""
     );
-
-    // 9) Find indexes of Year, Make, VIN, and Cost new (case-insensitive substring match)
     let yearColIdx = -1;
     let makeColIdx = -1;
     let vinColIdx = -1;
@@ -185,7 +208,7 @@ export default async function handler(req, res) {
       return res
         .status(400)
         .send(
-          "Input sheet is missing one of: Year, Make, VIN, or Cost new (case-insensitive)."
+          "Unable to detect all required columns (Year, Make, VIN, Cost) in the header row."
         );
     }
 
@@ -196,20 +219,29 @@ export default async function handler(req, res) {
       newSheet[address] = { v: headerText };
     });
 
-    // 11) For each data row in the input (rows[1] onward), extract Year/Make/VIN/Cost and place into output
-    for (let i = 1; i < rows.length; i++) {
+    // 11) For each data row after the headerRowIdx, extract Year/Make/VIN/Cost and place into output
+    let outputRowCount = 0;
+    for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const inputRow = rows[i];
+      // Stop if we hit an empty row or a different section (e.g. "TRAILERS")
+      // We check: if all four key columns are empty, skip
+      const yearCell = (inputRow[yearColIdx] || "").toString().trim();
+      const makeCell = (inputRow[makeColIdx] || "").toString().trim();
+      const vinCell = (inputRow[vinColIdx] || "").toString().trim();
+      const costCell = (inputRow[costColIdx] || "").toString().trim();
+      if (!yearCell && !makeCell && !vinCell && !costCell) {
+        continue;
+      }
 
-      // Extract values (or empty string if undefined)
-      const yearVal = inputRow[yearColIdx] ?? "";
-      const makeVal = inputRow[makeColIdx] ?? "";
-      const vinVal = inputRow[vinColIdx] ?? "";
-      const rawCost = inputRow[costColIdx] ?? "";
+      // Parse and clean each field
+      const yearVal = yearCell;
+      const makeVal = makeCell;
+      const vinVal = vinCell;
+      // Remove any non-digit characters from cost (e.g. "$20,000" → "20000")
+      const cleanedCost = costCell.replace(/\D/g, "");
 
-      // Clean Cost: strip anything that isn't a digit
-      const cleanedCost = String(rawCost).replace(/\D/g, "");
-
-      const outputRowNumber = i + 1; // because header was row 1
+      outputRowCount++;
+      const outputRowNumber = outputRowCount + 1; // row 2,3,4...
 
       // Place Year → column E (index 4)
       newSheet[`E${outputRowNumber}`] = { v: yearVal };
@@ -224,11 +256,18 @@ export default async function handler(req, res) {
       newSheet[`V${outputRowNumber}`] = { v: cleanedCost };
     }
 
-    // 12) Define the sheet range from A1 to AO(lastRow)
-    const lastRow = rows.length;
-    const lastColIndex = OUTPUT_HEADERS.length - 1; // 40 (A=0, B=1, …, AO=40)
+    // If no data rows were processed, return an error
+    if (outputRowCount === 0) {
+      return res
+        .status(400)
+        .send("No data rows with Year, Make, VIN, and Cost were found.");
+    }
+
+    // 12) Define the sheet range from A1 to AO(lastDataRow)
+    const lastRowIndex = outputRowCount; // since header is at row 1 (r=0), data rows 2..(outputRowCount+1)
+    const lastColIndex = OUTPUT_HEADERS.length - 1; // 40 (A=0, …, AO=40)
     const startCell = { r: 0, c: 0 };
-    const endCell = { r: lastRow - 1, c: lastColIndex };
+    const endCell = { r: lastRowIndex, c: lastColIndex };
     newSheet["!ref"] = XLSX.utils.encode_range(startCell, endCell);
 
     // 13) Create a new workbook, append this sheet, and write it to /tmp
