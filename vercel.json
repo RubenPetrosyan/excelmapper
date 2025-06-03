@@ -13,11 +13,11 @@
     },
     {
       "src": "/favicon.ico",
-      "dest": "/public/favicon.ico"
+      "dest": "public/favicon.ico"
     },
     {
       "src": "/(.*)",
-      "dest": "/public/index.html"
+      "dest": "public/index.html"
     }
   ]
 }
