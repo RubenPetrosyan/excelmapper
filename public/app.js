@@ -1,3 +1,5 @@
+// public/app.js
+
 // === Access Code ===
 document.getElementById("unlockBtn").addEventListener("click", () => {
   const code = document.getElementById("accessCode").value.trim();
@@ -41,10 +43,13 @@ dropZone.addEventListener("drop", (e) => {
 // === Process Button ===
 document.getElementById("processBtn").addEventListener("click", async () => {
   const files = fileInput.files;
-  if (!files.length) return alert("Please upload at least one file.");
-
   const progress = document.getElementById("progress");
   const downloadLinks = document.getElementById("downloadLinks");
+
+  if (!files.length) {
+    return alert("Please upload at least one file.");
+  }
+
   downloadLinks.innerHTML = "";
   progress.innerText = "Processing files...";
 
@@ -58,7 +63,13 @@ document.getElementById("processBtn").addEventListener("click", async () => {
         body: formData,
       });
 
-      if (!response.ok) throw new Error("Failed to process file");
+      if (!response.ok) {
+        // Read the server’s error message and show it
+        const errorText = await response.text();
+        throw new Error(
+          `Error processing "${files[i].name}": ${errorText}`
+        );
+      }
 
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -70,7 +81,9 @@ document.getElementById("processBtn").addEventListener("click", async () => {
       downloadLinks.appendChild(link);
     } catch (err) {
       console.error(err);
-      progress.innerText = `Error processing file: ${files[i].name}`;
+      // Show a clear error message alongside the file name
+      progress.innerText = `Error: ${err.message}`;
+      return; // Stop processing further files
     }
   }
 

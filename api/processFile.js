@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 
 /**
- * Disable Next.js’s built‐in bodyParser so Formidable can handle multipart/form‐data.
+ * Disable Next.js’s built‐in bodyParser so Formidable can handle multipart/form-data.
  */
 export const config = {
   api: {
@@ -142,7 +142,7 @@ export default async function handler(req, res) {
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
-      blankrows: false
+      blankrows: false,
     });
     if (!Array.isArray(rows) || rows.length === 0) {
       return res
@@ -150,18 +150,19 @@ export default async function handler(req, res) {
         .send("The first sheet in the workbook contains no data.");
     }
 
-    // 8) Find the header row index by searching for a row containing "year", "make", "vin", and "cost"
+    // 8) Find the header row index by searching for a row containing "year", "make", "vin", and ("cost" or "stated")
     let headerRowIdx = -1;
     for (let r = 0; r < rows.length; r++) {
       const row = rows[r].map((cell) =>
         typeof cell === "string" ? cell.toLowerCase() : ""
       );
-      if (
-        row.some((c) => c.includes("year")) &&
-        row.some((c) => c.includes("make")) &&
-        row.some((c) => c.includes("vin")) &&
-        row.some((c) => c.includes("cost"))
-      ) {
+      const hasYear = row.some((c) => c.includes("year"));
+      const hasMake = row.some((c) => c.includes("make"));
+      const hasVin = row.some((c) => c.includes("vin"));
+      // Accept either "cost" or "stated" in that same header row
+      const hasCostOrStated =
+        row.some((c) => c.includes("cost")) || row.some((c) => c.includes("stated"));
+      if (hasYear && hasMake && hasVin && hasCostOrStated) {
         headerRowIdx = r;
         break;
       }
@@ -171,7 +172,7 @@ export default async function handler(req, res) {
       return res
         .status(400)
         .send(
-          "Input sheet is missing a header row containing Year, Make, VIN, and Cost (case-insensitive)."
+          "Input sheet is missing a header row containing Year, Make, VIN, and Cost or Stated Value (case-insensitive)."
         );
     }
 
@@ -194,7 +195,10 @@ export default async function handler(req, res) {
       if (cellText.includes("vin") && vinColIdx === -1) {
         vinColIdx = idx;
       }
-      if (cellText.includes("cost") && costColIdx === -1) {
+      if (
+        (cellText.includes("cost") || cellText.includes("stated")) &&
+        costColIdx === -1
+      ) {
         costColIdx = idx;
       }
     });
@@ -208,7 +212,7 @@ export default async function handler(req, res) {
       return res
         .status(400)
         .send(
-          "Unable to detect all required columns (Year, Make, VIN, Cost) in the header row."
+          "Unable to detect all required columns (Year, Make, VIN, Cost/Stated) in the header row."
         );
     }
 
@@ -219,12 +223,11 @@ export default async function handler(req, res) {
       newSheet[address] = { v: headerText };
     });
 
-    // 11) For each data row after the headerRowIdx, extract Year/Make/VIN/Cost and place into output
+    // 11) For each data row after headerRowIdx, extract Year/Make/VIN/Cost and place into output
     let outputRowCount = 0;
     for (let i = headerRowIdx + 1; i < rows.length; i++) {
       const inputRow = rows[i];
-      // Stop if we hit an empty row or a different section (e.g. "TRAILERS")
-      // We check: if all four key columns are empty, skip
+      // If all key columns are blank, skip this row
       const yearCell = (inputRow[yearColIdx] || "").toString().trim();
       const makeCell = (inputRow[makeColIdx] || "").toString().trim();
       const vinCell = (inputRow[vinColIdx] || "").toString().trim();
@@ -241,7 +244,7 @@ export default async function handler(req, res) {
       const cleanedCost = costCell.replace(/\D/g, "");
 
       outputRowCount++;
-      const outputRowNumber = outputRowCount + 1; // row 2,3,4...
+      const outputRowNumber = outputRowCount + 1; // because header is at row 1 (r=0)
 
       // Place Year → column E (index 4)
       newSheet[`E${outputRowNumber}`] = { v: yearVal };
@@ -260,11 +263,11 @@ export default async function handler(req, res) {
     if (outputRowCount === 0) {
       return res
         .status(400)
-        .send("No data rows with Year, Make, VIN, and Cost were found.");
+        .send("No data rows with Year, Make, VIN, and Cost/Stated were found.");
     }
 
     // 12) Define the sheet range from A1 to AO(lastDataRow)
-    const lastRowIndex = outputRowCount; // since header is at row 1 (r=0), data rows 2..(outputRowCount+1)
+    const lastRowIndex = outputRowCount; // header is at r=0, data rows at r=1..outputRowCount
     const lastColIndex = OUTPUT_HEADERS.length - 1; // 40 (A=0, …, AO=40)
     const startCell = { r: 0, c: 0 };
     const endCell = { r: lastRowIndex, c: lastColIndex };
