@@ -17,32 +17,41 @@ export default async function handler(req, res) {
     return res.status(405).send("Method not allowed");
   }
 
-  // Set up Formidable to parse exactly one file under field name "file"
+  // Parse exactly one file under field name "file"
   const form = new IncomingForm({ multiples: false });
-
   form.parse(req, async (err, fields, files) => {
     if (err) {
       console.error("Formidable error:", err);
       return res.status(500).send("Error parsing uploaded file");
     }
 
-    // Ensure there is a file under the exact field name "file"
+    // Check that a file arrived under "file"
     const file = files.file;
     if (!file) {
       return res
         .status(400)
         .send("Please upload under the form field name 'file'.");
     }
+
+    // Log metadata so you can confirm size / temp path
+    console.log("Incoming file metadata:", {
+      originalFilename: file.originalFilename,
+      size: file.size,
+      filepath: file.filepath,
+      mimeType: file.mimetype || "n/a",
+    });
+
     if (file.size === 0) {
       return res.status(400).send("Uploaded file was empty.");
     }
 
-    // Try reading the uploaded .xlsx (or .xls) from its temp filepath
+    // Try reading the uploaded file into a Buffer, then parse as XLSX
     let workbook;
     try {
-      workbook = XLSX.readFile(file.filepath);
+      const fileBuffer = fs.readFileSync(file.filepath);
+      workbook = XLSX.read(fileBuffer, { type: "buffer" });
     } catch (xlsxErr) {
-      console.error("XLSX.readFile error:", xlsxErr);
+      console.error("XLSX.read (buffer) error:", xlsxErr);
       return res.status(400).send("Invalid or unreadable Excel file.");
     }
 
@@ -53,7 +62,7 @@ export default async function handler(req, res) {
     }
     const sheet = workbook.Sheets[firstSheetName];
 
-    // Convert the entire sheet into a 2D array (header:1) so we can see every row/column
+    // Convert the entire sheet to a 2D array so we can locate data anywhere
     const rows = XLSX.utils.sheet_to_json(sheet, {
       header: 1,
       defval: "",
@@ -65,15 +74,12 @@ export default async function handler(req, res) {
         .send("The first sheet in the workbook contains no data.");
     }
 
-    // Build an array of output objects: each must have Make, Year, VIN Number
+    // Build output: any row with ≥3 non-empty cells → [Make, Year, VIN]
     const output = [];
     rows.forEach((rowArr) => {
-      // Collect all non-empty cells in this row (in left-to-right order)
-      const nonEmpty = rowArr.filter((cell) => {
-        return cell !== null && cell !== undefined && cell !== "";
-      });
-
-      // If this row has at least three non-empty values, assume they map to [Make, Year, VIN]
+      const nonEmpty = rowArr.filter(
+        (cell) => cell !== null && cell !== undefined && cell !== ""
+      );
       if (nonEmpty.length >= 3) {
         const [makeVal, yearVal, vinVal] = nonEmpty;
         output.push({
@@ -90,14 +96,14 @@ export default async function handler(req, res) {
         .send("No rows with at least three non-empty cells were found.");
     }
 
-    // Create a new workbook with a single sheet named “Standardized”
+    // Create a new workbook with exactly those three columns (A, B, C)
     const newSheet = XLSX.utils.json_to_sheet(output, {
       header: ["Make", "Year", "VIN Number"],
     });
     const newBook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(newBook, newSheet, "Standardized");
 
-    // Write that workbook to /tmp so Vercel can read it back
+    // Write to /tmp
     const timestamp = Date.now();
     const tempPath = path.join("/tmp", `processed-${timestamp}.xlsx`);
     try {
@@ -107,7 +113,7 @@ export default async function handler(req, res) {
       return res.status(500).send("Failed to create the processed file.");
     }
 
-    // Verify that the file was actually written and is non-empty
+    // Verify /tmp file exists and is non-empty
     let stats;
     try {
       stats = fs.statSync(tempPath);
@@ -122,11 +128,10 @@ export default async function handler(req, res) {
       return res.status(500).send("Processed file is empty.");
     }
 
-    // Read the result and stream it back
+    // Read the final buffer and send it back
     try {
       const fileBuffer = fs.readFileSync(tempPath);
       const originalName = file.originalFilename || `upload-${timestamp}.xlsx`;
-
       res.setHeader(
         "Content-Type",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
