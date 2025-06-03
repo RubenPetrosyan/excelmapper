@@ -1,23 +1,11 @@
 {
   "version": 2,
   "builds": [
-    {
-      "src": "api/processFile.js",
-      "use": "@vercel/node"
-    }
+    { "src": "api/processFile.js", "use": "@vercel/node" }
   ],
   "routes": [
-    {
-      "src": "/api/processFile",
-      "dest": "api/processFile.js"
-    },
-    {
-      "src": "/favicon.ico",
-      "dest": "public/favicon.ico"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "public/index.html"
-    }
+    { "src": "/api/processFile", "dest": "api/processFile.js" },
+    { "src": "/favicon.ico", "dest": "public/favicon.ico" },
+    { "src": "/(.*)", "dest": "public/index.html" }
   ]
 }
