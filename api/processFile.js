@@ -30,6 +30,12 @@ export default async function handler(req, res) {
 
     // 2) Ensure a file arrived under files.file
     const file = files.file;
+    let fileObj = files.file;
+if (Array.isArray(fileObj)) {
+  // Formidable gave us an array; pick the first file
+  fileObj = fileObj[0];
+}
+
     if (!file) {
       console.error("No `files.file` present. Keys were:", Object.keys(files));
       return res
