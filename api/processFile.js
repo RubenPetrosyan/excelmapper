@@ -3,13 +3,13 @@ const XLSX = require("xlsx");
 const fs = require("fs");
 const path = require("path");
 
-export const config = {
+module.exports.config = {
   api: {
-    bodyParser: false, // Required for formidable
+    bodyParser: false,
   },
 };
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).send("Method not allowed");
   }
@@ -32,8 +32,6 @@ export default async function handler(req, res) {
         defval: "",
       });
 
-      // Auto-map known fields (flexible structure)
-      const columns = ["make", "year", "vin"];
       const output = sheet.map((row) => {
         const newRow = {};
         for (let key in row) {
@@ -53,7 +51,10 @@ export default async function handler(req, res) {
       XLSX.writeFile(newBook, tempPath);
 
       const fileBuffer = fs.readFileSync(tempPath);
-      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
       res.setHeader("Content-Disposition", "attachment; filename=Processed.xlsx");
       res.send(fileBuffer);
     } catch (error) {
@@ -61,4 +62,4 @@ export default async function handler(req, res) {
       res.status(500).send("Failed to process Excel file");
     }
   });
-}
+};
