@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ExcelMapper</title>
 
-  <!-- Styles and Favicon -->
-  <link rel="stylesheet" href="styles.css" />
-  <link rel="icon" href="favicon.ico" type="image/x-icon" />
+  <!-- Absolute paths for Vercel static hosting -->
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.ico" type="image/x-icon" />
 </head>
 <body>
   <div class="container">
@@ -19,7 +19,7 @@
       <button id="unlockBtn">Unlock</button>
     </div>
 
-    <!-- App UI (Hidden by default) -->
+    <!-- Main App UI -->
     <div id="app" style="display: none;">
       <div class="upload-area" id="dropZone">
         <p>Drag & drop Excel files here or</p>
@@ -34,6 +34,6 @@
   </div>
 
   <!-- Main App Logic -->
-  <script src="app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
