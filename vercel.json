@@ -5,6 +5,13 @@
     { "src": "public/**",           "use": "@vercel/static" }
   ],
   "routes": [
-    { "src": "/api/processFile", "dest": "api/processFile.js" }
+    {
+      "src": "/api/processFile",
+      "dest": "api/processFile.js"
+    },
+    {
+      "src": "/",
+      "dest": "public/index.html"
+    }
   ]
 }
